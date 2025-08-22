@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Friendly Slots</title>
+  <style>
+    :root{
+      --bg:#0f172a; --panel:#0b1020; --ink:#e2e8f0; --muted:#94a3b8; --accent:#22c55e; --accent2:#38bdf8;
+    }
+    html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);font-family:system-ui,Arial,sans-serif}
+    main{max-width:960px;margin:24px auto;padding:16px}
+    h1{margin:0 0 10px 0;font-size:1.8rem}
+    .wrap{background:#111827;border-radius:16px;box-shadow:0 10px 24px rgba(0,0,0,.35);padding:16px}
+    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+    .panel{background:var(--panel);border-radius:12px;padding:12px}
+    #reels{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:14px;background:var(--panel);border-radius:12px;margin:10px 0}
+    .reel{width:160px;height:160px;display:grid;place-items:center;background:#0a0f1c;border-radius:12px;font-size:86px;user-select:none}
+    .reel .bar{font-size:40px;font-weight:900;letter-spacing:2px;border:3px solid #e2e8f0;padding:6px 10px;border-radius:8px}
+    @media (max-width:560px){.reel{width:116px;height:116px;font-size:58px}}
+    button{border:0;border-radius:10px;padding:10px 16px;font-size:1rem;cursor:pointer}
+    #spinBtn{background:var(--accent);color:#05240f}
+    #spinBtn:active{transform:translateY(1px)}
+    #result{min-height:1.5rem;font-weight:700}
+    .label{color:var(--muted);font-size:.9rem}
+    .value{font-weight:700}
+    a{color:var(--accent2)}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:8px;text-align:left;border-bottom:1px solid #1f2937}
+    input[type="number"]{width:90px;padding:6px 8px;border-radius:8px;border:1px solid #334155;background:#0b1020;color:#e2e8f0}
+    .note{color:var(--muted);font-size:.9rem;margin-top:4px}
+  </style>
+</head>
+<body>
+<main>
+  <section class="wrap">
+    <h1>Friendly Slots</h1>
+
+    <div class="panel">
+      <div class="label">How to play</div>
+      <div class="note">
+        Click Spin to wager the current bet. The game draws outcomes using the exact probabilities and multipliers you specified. Wins are credited immediately. You can change the bet below.
+      </div>
+    </div>
+
+    <div id="reels">
+      <div class="reel" id="reel1"><span class="bar">BAR</span></div>
+      <div class="reel" id="reel2">🔔</div>
+      <div class="reel" id="reel3">🍋</div>
+    </div>
+
+    <div class="row">
+      <button id="spinBtn">Spin</button>
+
+      <div class="panel">
+        <div class="label">Credits</div>
+        <div id="credits" class="value">100.00</div>
+      </div>
+
+      <div class="panel">
+        <div class="label">Bet per spin</div>
+        <div class="row">
+          <input id="betInput" type="number" step="0.01" min="0.01" value="1.00" />
+          <button id="maxBet">Set 5.00</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="label">Last result</div>
+        <div id="result" class="value">Ready</div>
+        <div id="detail" class="note"></div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:10px">
+      <div class="label">Pay table and probabilities</div>
+      <table id="paytable">
+        <thead>
+          <tr><th>Outcome</th><th>Pays</th><th>Chance</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div class="note" id="rtpLine"></div>
+    </div>
+
+    <audio id="spinSound"></audio>
+  </section>
+</main>
+
+<script>
+/*
+  Exact outcome model from your specification.
+  The game draws one outcome per spin using these percentages
+  and then renders a matching set of three symbols.
+  Payouts are multipliers on the current bet.
+*/
+const OUTCOMES = [
+  { key:"TRIPLE_7",        label:"Triple Seven",               pay:15.00,  pct:0.10  },
+  { key:"TRIPLE_BAR",      label:"Triple Bar",                 pay:7.00,   pct:0.80  },
+  { key:"TRIPLE_BELL",     label:"Triple Bell",                pay:4.00,   pct:2.70  },
+  { key:"TRIPLE_LEMON",    label:"Triple Lemon",               pay:2.50,   pct:6.40  },
+  { key:"TWO_7_ANY",       label:"Two Sevens + any",           pay:2.00,   pct:2.70  },
+  { key:"TWO_BAR_ANY",     label:"Two Bars + any",             pay:1.50,   pct:9.60  },
+  { key:"TWO_BELL_ANY",    label:"Two Bells + any",            pay:1.10,   pct:18.90 },
+  { key:"TWO_LEMON_ANY",   label:"Two Lemons + any",           pay:0.75,   pct:28.80 },
+  { key:"ONE_7_ONLY",      label:"Exactly one Seven",          pay:0.12,   pct:15.60 },
+  { key:"OTHER",           label:"All other outcomes",         pay:0.00,   pct:14.40 }
+];
+
+// Symbols used on the reels
+const SYM = {
+  SEVEN: { name:"SEVEN", render: ()=>"7️⃣" },
+  BAR:   { name:"BAR",   render: ()=>{
+    const span = document.createElement("span");
+    span.className = "bar";
+    span.textContent = "BAR";
+    return span;
+  }},
+  BELL:  { name:"BELL",  render: ()=>"🔔" },
+  LEMON: { name:"LEMON", render: ()=>"🍋" }
+};
+const NON_SEVEN = [SYM.BAR, SYM.BELL, SYM.LEMON];
+const ALL_SYMS  = [SYM.SEVEN, ...NON_SEVEN];
+
+// Build cumulative distribution for RNG
+const CUM = [];
+let acc = 0;
+for (const o of OUTCOMES){
+  acc += o.pct / 100;
+  CUM.push({ key:o.key, upTo:acc });
+}
+const TOTAL = acc; // should be 1.0
+
+function randOutcomeKey(){
+  const r = Math.random();
+  for (const c of CUM){
+    if (r < c.upTo) return c.key;
+  }
+  return "OTHER";
+}
+
+// Utility for rendering a symbol into a reel cell
+function setReel(node, symbol){
+  node.textContent = "";
+  const piece = symbol.render();
+  if (typeof piece === "string"){
+    node.textContent = piece;
+  } else {
+    node.appendChild(piece);
+  }
+}
+
+// Make an array of three symbols that fits the drawn outcome
+function realizeSymbols(key){
+  const picks = () => NON_SEVEN[Math.floor(Math.random()*NON_SEVEN.length)];
+  const pickOtherThan = (avoid) => {
+    const pool = ALL_SYMS.filter(s => s.name !== avoid.name);
+    return pool[Math.floor(Math.random()*pool.length)];
+  };
+  const pickTwoDistinctNonSeven = () => {
+    let a = picks();
+    let b = picks();
+    while (b.name === a.name) b = picks();
+    return [a,b];
+  };
+
+  switch(key){
+    case "TRIPLE_7":      return [SYM.SEVEN, SYM.SEVEN, SYM.SEVEN];
+    case "TRIPLE_BAR":    return [SYM.BAR,   SYM.BAR,   SYM.BAR];
+    case "TRIPLE_BELL":   return [SYM.BELL,  SYM.BELL,  SYM.BELL];
+    case "TRIPLE_LEMON":  return [SYM.LEMON, SYM.LEMON, SYM.LEMON];
+    case "TWO_7_ANY": {
+      // exactly two sevens, third is not seven
+      const other = picks();
+      const pos = Math.floor(Math.random()*3);
+      const arr = [SYM.SEVEN, SYM.SEVEN, SYM.SEVEN];
+      arr[pos] = other;
+      return arr;
+    }
+    case "TWO_BAR_ANY": {
+      const other = pickOtherThan(SYM.BAR);
+      const pos = Math.floor(Math.random()*3);
+      const arr = [SYM.BAR, SYM.BAR, SYM.BAR];
+      arr[pos] = other;
+      return arr;
+    }
+    case "TWO_BELL_ANY": {
+      const other = pickOtherThan(SYM.BELL);
+      const pos = Math.floor(Math.random()*3);
+      const arr = [SYM.BELL, SYM.BELL, SYM.BELL];
+      arr[pos] = other;
+      return arr;
+    }
+    case "TWO_LEMON_ANY": {
+      const other = pickOtherThan(SYM.LEMON);
+      const pos = Math.floor(Math.random()*3);
+      const arr = [SYM.LEMON, SYM.LEMON, SYM.LEMON];
+      arr[pos] = other;
+      return arr;
+    }
+    case "ONE_7_ONLY": {
+      // exactly one seven, and the other two are non seven and distinct
+      const pos = Math.floor(Math.random()*3);
+      const [a,b] = pickTwoDistinctNonSeven();
+      const res = [a,b];
+      res.splice(pos, 0, SYM.SEVEN);
+      return res;
+    }
+    case "OTHER": {
+      // no sevens, all three distinct from BAR, BELL, LEMON
+      const pool = [...NON_SEVEN];
+      const a = pool.splice(Math.floor(Math.random()*pool.length), 1)[0];
+      const b = pool.splice(Math.floor(Math.random()*pool.length), 1)[0];
+      const c = pool[0];
+      // randomize order
+      const arr = [a,b,c];
+      for (let i = arr.length - 1; i > 0; i--){
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      return arr;
+    }
+    default:
+      return [SYM.BAR, SYM.BELL, SYM.LEMON];
+  }
+}
+
+function getOutcomeInfo(key){ return OUTCOMES.find(o => o.key === key); }
+
+// Simple animation during spin
+function animateReels(ms=600){
+  return new Promise(resolve=>{
+    const t0 = performance.now();
+    function frame(now){
+      const idx = Math.floor((now - t0) / 120) % ALL_SYMS.length;
+      setReel(reel1, ALL_SYMS[idx]);
+      setReel(reel2, ALL_SYMS[(idx+1)%ALL_SYMS.length]);
+      setReel(reel3, ALL_SYMS[(idx+2)%ALL_SYMS.length]);
+      if (now - t0 < ms) requestAnimationFrame(frame); else resolve();
+    }
+    requestAnimationFrame(frame);
+  });
+}
+
+// Lightweight click sound to satisfy user gesture audio policy
+function blip(){
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return;
+  const ctx = new AudioCtx();
+  const o = ctx.createOscillator();
+  const g = ctx.createGain();
+  o.type = "triangle";
+  o.frequency.value = 440;
+  o.connect(g); g.connect(ctx.destination);
+  g.gain.setValueAtTime(0.0001, ctx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.3, ctx.currentTime + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.12);
+  o.start(); o.stop(ctx.currentTime + 0.13);
+}
+
+/* UI wiring */
+const reel1 = document.getElementById("reel1");
+const reel2 = document.getElementById("reel2");
+const reel3 = document.getElementById("reel3");
+const spinBtn = document.getElementById("spinBtn");
+const creditsEl = document.getElementById("credits");
+const resultEl = document.getElementById("result");
+const detailEl = document.getElementById("detail");
+const betInput = document.getElementById("betInput");
+const maxBetBtn = document.getElementById("maxBet");
+
+let credits = 100.00;
+
+function fmt(n){ return (Math.round(n*100)/100).toFixed(2); }
+
+creditsEl.textContent = fmt(credits);
+
+maxBetBtn.addEventListener("click", ()=>{
+  betInput.value = "5.00";
+  detailEl.textContent = "Bet set to 5.00";
+});
+
+function validateBet(){
+  let b = parseFloat(betInput.value);
+  if (!isFinite(b) || b <= 0){ b = 1.00; betInput.value = "1.00"; }
+  return Math.max(0.01, Math.round(b*100)/100);
+}
+
+function updatePaytable(){
+  const tbody = document.querySelector("#paytable tbody");
+  tbody.innerHTML = "";
+  OUTCOMES.forEach(o=>{
+    const tr = document.createElement("tr");
+    const td1 = document.createElement("td"); td1.textContent = o.label;
+    const td2 = document.createElement("td"); td2.textContent = o.pay.toString() + "× bet";
+    const td3 = document.createElement("td"); td3.textContent = o.pct.toFixed(2) + "%";
+    tr.appendChild(td1); tr.appendChild(td2); tr.appendChild(td3);
+    tbody.appendChild(tr);
+  });
+  const rtp = OUTCOMES.reduce((s,o)=> s + o.pay * (o.pct/100), 0);
+  document.getElementById("rtpLine").textContent =
+    "Implied average return is about " + (rtp).toFixed(5) +
+    " per 1.00 wager, which is an owner profit of roughly " + (1 - rtp).toFixed(5) + " per 1.00 on long play.";
+}
+updatePaytable();
+
+async function spin(){
+  const bet = validateBet();
+  if (credits < bet){
+    resultEl.textContent = "Not enough credits";
+    detailEl.textContent = "Add credits or lower bet";
+    return;
+  }
+  blip();
+  credits -= bet;
+  creditsEl.textContent = fmt(credits);
+  resultEl.textContent = "Spinning";
+  detailEl.textContent = "";
+
+  await animateReels(650);
+
+  const key = randOutcomeKey();
+  const info = getOutcomeInfo(key);
+  const syms = realizeSymbols(key);
+
+  setReel(reel1, syms[0]);
+  setReel(reel2, syms[1]);
+  setReel(reel3, syms[2]);
+
+  const win = info.pay * bet;
+  if (win > 0){
+    credits += win;
+    creditsEl.textContent = fmt(credits);
+    resultEl.textContent = "Win " + fmt(win);
+    detailEl.textContent = info.label + " pays " + info.pay.toFixed(2) + "×";
+  } else {
+    resultEl.textContent = "Try again";
+    detailEl.textContent = info.label;
+  }
+}
+
+spinBtn.addEventListener("click", spin);
+</script>
+</body>
+</html>

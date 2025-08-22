@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Friendly Slots</title>
+  <style>
+    :root { --bg:#0f172a; --surface:#111827; --panel:#0b1020; --ink:#e5e7eb; --muted:#94a3b8; --accent:#22c55e; --accent2:#38bdf8; }
+    html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);font-family:system-ui,Arial,sans-serif}
+    main{max-width:980px;margin:24px auto;padding:16px}
+    h1{margin:0 0 12px 0;font-size:1.9rem}
+    .wrap{background:var(--surface);border-radius:16px;box-shadow:0 10px 24px rgba(0,0,0,.35);padding:16px}
+    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+    .panel{background:var(--panel);border-radius:12px;padding:12px}
+    .label{color:var(--muted);font-size:.9rem}
+    .value{font-weight:700}
+    #reels{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:12px 0;padding:14px;background:var(--panel);border-radius:12px}
+    .reel{width:170px;height:170px;display:grid;place-items:center;background:#0a0f1c;border-radius:14px;font-size:100px;user-select:none}
+    @media (max-width:560px){.reel{width:120px;height:120px;font-size:68px}}
+    button{border:0;border-radius:10px;padding:10px 16px;font-size:1rem;cursor:pointer}
+    #spinBtn{background:var(--accent);color:#05240f}
+    #spinBtn:active{transform:translateY(1px)}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:8px;text-align:left;border-bottom:1px solid #1f2937}
+    .muted{color:var(--muted)}
+    .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    @media (max-width:800px){.grid2{grid-template-columns:1fr}}
+    .note{font-size:.9rem;color:var(--muted)}
+    .pill{display:inline-block;padding:2px 8px;border-radius:999px;background:#0a1020;color:#9fdcff;font-size:.78rem}
+  </style>
+</head>
+<body>
+<main>
+  <section class="wrap">
+    <h1>Friendly Slots <span class="pill">RTP ≈ 97.962 percent</span></h1>
+
+    <div id="reels">
+      <div class="reel" id="reel1">7️⃣</div>
+      <div class="reel" id="reel2">🔔</div>
+      <div class="reel" id="reel3">🍋</div>
+    </div>
+
+    <div class="row">
+      <button id="spinBtn">Spin</button>
+      <div class="panel"><div class="label">Credits</div><div id="credits" class="value">100.00</div></div>
+      <div class="panel">
+        <div class="label">Bet</div>
+        <div class="row">
+          <button class="betBtn" data-bet="0.25">0.25</button>
+          <button class="betBtn" data-bet="0.50">0.50</button>
+          <button class="betBtn" data-bet="1">1</button>
+          <button class="betBtn" data-bet="2">2</button>
+          <button class="betBtn" data-bet="5">5</button>
+        </div>
+      </div>
+      <div class="panel"><div class="label">Last result</div><div id="result" class="value">Ready</div></div>
+    </div>
+
+    <div class="grid2" style="margin-top:12px">
+      <div class="panel">
+        <div class="label">Payout table</div>
+        <table id="paytable"></table>
+      </div>
+      <div class="panel">
+        <div class="label">About this build</div>
+        <p class="note">
+          Outcome weighted to your exact probabilities. On each spin, the game samples one of the outcomes below
+          according to its percentage and renders matching reels, so the long run return matches your design.
+        </p>
+        <p class="note">Symbols used  7️⃣ Seven, 🟥 Bar, 🔔 Bell, 🍋 Lemon.</p>
+      </div>
+    </div>
+
+    <audio id="blip"></audio>
+  </section>
+</main>
+
+<script>
+/*
+  Outcome driven model using your exact percentages.
+
+  Outcomes and probabilities you supplied
+  Triple Seven             15x payout,      0.10%
+  Triple Bar               7x payout,       0.80%
+  Triple Bell              4x payout,       2.70%
+  Triple Lemon             2.5x payout,     6.40%
+  Two Sevens + any         2x payout,       2.70%
+  Two Bars + any           1.5x payout,     9.60%
+  Two Bells + any          1.1x payout,     18.90%
+  Two Lemons + any         0.75x payout,    28.80%
+  Exactly one Seven        0.12x payout,    15.60%
+  All other outcomes       0x payout,       14.40%
+
+  Sum of probabilities = 100%
+  Expected return ≈ 0.97962 per 1.00 wager (owner ≈ 2 cents per dollar).
+*/
+
+const SYMBOLS = {
+  seven: { emoji:"7️⃣", name:"Seven" },
+  bar:   { emoji:"🟥", name:"Bar"   },
+  bell:  { emoji:"🔔", name:"Bell"  },
+  lemon: { emoji:"🍋", name:"Lemon" }
+};
+const ORDER = [SYMBOLS.seven, SYMBOLS.bar, SYMBOLS.bell, SYMBOLS.lemon];
+
+const OUTCOMES = [
+  { id:"triple7",     label:"Triple Seven",  pay:15.00,  p:0.10,  make:()=>[SYMBOLS.seven,SYMBOLS.seven,SYMBOLS.seven] },
+  { id:"tripleBar",   label:"Triple Bar",    pay:7.00,   p:0.80,  make:()=>[SYMBOLS.bar,SYMBOLS.bar,SYMBOLS.bar] },
+  { id:"tripleBell",  label:"Triple Bell",   pay:4.00,   p:2.70,  make:()=>[SYMBOLS.bell,SYMBOLS.bell,SYMBOLS.bell] },
+  { id:"tripleLem",   label:"Triple Lemon",  pay:2.50,   p:6.40,  make:()=>[SYMBOLS.lemon,SYMBOLS.lemon,SYMBOLS.lemon] },
+
+  { id:"two7",        label:"Two Sevens",    pay:2.00,   p:2.70,  make:()=> placeTwoOf(SYMBOLS.seven, notOf(SYMBOLS.seven)) },
+  { id:"twoBar",      label:"Two Bars",      pay:1.50,   p:9.60,  make:()=> placeTwoOf(SYMBOLS.bar,   notOf(SYMBOLS.bar)) },
+  { id:"twoBell",     label:"Two Bells",     pay:1.10,   p:18.90, make:()=> placeTwoOf(SYMBOLS.bell,  notOf(SYMBOLS.bell)) },
+  { id:"twoLemon",    label:"Two Lemons",    pay:0.75,   p:28.80, make:()=> placeTwoOf(SYMBOLS.lemon, notOf(SYMBOLS.lemon)) },
+
+  { id:"one7",        label:"Exactly one Seven", pay:0.12, p:15.60, make:()=> placeExactlyOne(SYMBOLS.seven, [SYMBOLS.bar,SYMBOLS.bell,SYMBOLS.lemon]) },
+
+  { id:"other",       label:"All other outcomes", pay:0.00, p:14.40, make:()=> randomOther() }
+];
+
+// helpers to build reels for composite outcomes
+function rndInt(n){ return Math.floor(Math.random()*n); }
+function shuffle(arr){ for(let i=arr.length-1;i>0;i--){ const j=rndInt(i+1); [arr[i],arr[j]]=[arr[j],arr[i]]; } return arr; }
+function notOf(sym){ return ORDER.filter(s => s !== sym); }
+
+function placeTwoOf(sym, choicesForThird){
+  const third = choicesForThird[rndInt(choicesForThird.length)];
+  const trio = [sym, sym, third];
+  return shuffle(trio);
+}
+function placeExactlyOne(sym, others){
+  const pick1 = sym;
+  const pick2 = others[rndInt(others.length)];
+  let pick3 = others[rndInt(others.length)];
+  // Avoid forming an accidental pair of the non seven symbol too often
+  if (pick3 === pick2){ pick3 = others[(others.indexOf(pick3)+1)%others.length]; }
+  return shuffle([pick1, pick2, pick3]);
+}
+function randomOther(){
+  // Build any three symbols that do NOT match any winning rule and also not exactly one seven
+  // Strategy  pick three all different with zero sevens, for example Bar Bell Lemon
+  const base = [SYMBOLS.bar, SYMBOLS.bell, SYMBOLS.lemon];
+  return shuffle(base.slice()); // all different, zero payout
+}
+
+// weighted picker over OUTCOMES by percentage
+const CUM = (()=> {
+  const arr=[]; let acc=0;
+  OUTCOMES.forEach(o=>{ acc += o.p; arr.push({acc, o}); });
+  return arr;
+})();
+function pickOutcome(){
+  const r = Math.random()*100;
+  for(const c of CUM){ if (r <= c.acc) return c.o; }
+  return OUTCOMES[OUTCOMES.length-1];
+}
+
+// UI bindings
+const reels = [document.getElementById("reel1"), document.getElementById("reel2"), document.getElementById("reel3")];
+const creditsEl = document.getElementById("credits");
+const resultEl  = document.getElementById("result");
+const spinBtn   = document.getElementById("spinBtn");
+const blip      = document.getElementById("blip");
+let credits = 100.00;
+let bet = 1.00;
+
+function fmt(n){ return n.toFixed(2); }
+creditsEl.textContent = fmt(credits);
+document.querySelectorAll(".betBtn").forEach(b=>{
+  b.addEventListener("click", ()=>{
+    bet = parseFloat(b.dataset.bet);
+    resultEl.textContent = "Bet " + fmt(bet);
+  });
+});
+
+function animate(ms=700, step=80){
+  return new Promise(resolve=>{
+    const t0 = performance.now();
+    function frame(now){
+      const idx = Math.floor((now - t0) / step) % ORDER.length;
+      reels.forEach(r => r.textContent = ORDER[idx].emoji);
+      if (now - t0 < ms) requestAnimationFrame(frame);
+      else resolve();
+    }
+    requestAnimationFrame(frame);
+  });
+}
+
+function playClick(){
+  if (blip.dataset.ready) return;
+  try{
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = ctx.createOscillator(); const g = ctx.createGain();
+    o.type = "triangle"; o.frequency.value = 420;
+    o.connect(g); g.connect(ctx.destination);
+    g.gain.setValueAtTime(0.001, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime+0.01);
+    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+0.12);
+    o.start(); o.stop(ctx.currentTime+0.13);
+    blip.dataset.ready = "1";
+  }catch(e){}
+}
+
+function showReels(a,b,c){
+  reels[0].textContent = a.emoji;
+  reels[1].textContent = b.emoji;
+  reels[2].textContent = c.emoji;
+}
+
+function updatePaytable(){
+  const tbl = document.getElementById("paytable");
+  const rows = OUTCOMES
+    .filter(o => o.id !== "other")
+    .map(o => {
+      const combo = o.id.startsWith("triple")
+        ? labelForTriple(o)
+        : o.id === "one7" ? "Exactly one Seven" : labelForTwoOf(o);
+      return `<tr><td>${combo}</td><td>${o.pay.toFixed(2)}× bet</td><td class="muted">${o.p.toFixed(2)}%</td></tr>`;
+    })
+    .join("");
+  tbl.innerHTML = `<tr><th>Combination</th><th>Pays</th><th>Prob.</th></tr>` + rows +
+                  `<tr><td>All other outcomes</td><td>0</td><td class="muted">14.40%</td></tr>`;
+}
+function labelForTriple(o){
+  if (o.id === "triple7") return "7️⃣ 7️⃣ 7️⃣";
+  if (o.id === "tripleBar") return "🟥 🟥 🟥";
+  if (o.id === "tripleBell") return "🔔 🔔 🔔";
+  if (o.id === "tripleLem") return "🍋 🍋 🍋";
+  return "Triple";
+}
+function labelForTwoOf(o){
+  if (o.id === "two7") return "Two 7️⃣ + any";
+  if (o.id === "twoBar") return "Two 🟥 + any";
+  if (o.id === "twoBell") return "Two 🔔 + any";
+  if (o.id === "twoLemon") return "Two 🍋 + any";
+  return "Two of a kind";
+}
+updatePaytable();
+
+async function spin(){
+  if (credits < bet){
+    resultEl.textContent = "Not enough credits";
+    return;
+  }
+  playClick();
+  credits -= bet;
+  creditsEl.textContent = fmt(credits);
+  resultEl.textContent = "Spinning";
+  await animate();
+
+  const o = pickOutcome();
+  const [a,b,c] = o.make();
+  showReels(a,b,c);
+
+  const win = o.pay * bet;
+  if (win > 0){
+    credits += win;
+    creditsEl.textContent = fmt(credits);
+    resultEl.textContent = `${o.label}  Win ${fmt(win)}`;
+  } else {
+    resultEl.textContent = "Try again";
+  }
+}
+
+spinBtn.addEventListener("click", spin);
+</script>
+</body>
+</html>
